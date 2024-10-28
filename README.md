@@ -7,7 +7,7 @@ A Streamlit application where users can interact with a MongoDB Bot and ask quer
 - Interactive chat with MongoDB Bot
 - Query MongoDB schemas using natural language
 - Integration with GROQ API for advanced querying
-- User-friendly interface built with Streamli
+- User-friendly interface built with Streamlit
 
 ## Tech Stack
 
