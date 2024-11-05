@@ -3,4 +3,3 @@ pymongo
 langchain
 langchain_groq
 langchain_community
-bson
