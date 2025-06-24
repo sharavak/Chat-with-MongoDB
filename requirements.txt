@@ -4,3 +4,4 @@ langchain
 langchain_groq
 langchain_community
 streamlit_extras
+json5
