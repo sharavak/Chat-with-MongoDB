@@ -8,7 +8,7 @@ An **AI-powered chatbot interface** that allows users to interact with a MongoDB
 
 ## Features
 
-- 💬 **Conversational Chat UI** to interact with MongoDB like you're talking to a data assistant.
+- 💬 **Conversational Chat with an Agent** to interact with MongoDB like you're talking to a data assistant.
 - 🧠 **LLM-powered Query Understanding** using [GROQ API](https://groq.com/).
 - 🗃️ **MongoDB Query Execution** from natural language (via PyMongo).
 - 📚 **Contextual Memory** using LangChain's message history.

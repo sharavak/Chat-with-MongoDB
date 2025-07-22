@@ -1,20 +1,54 @@
 import streamlit as st
-from langchain_community.chat_message_histories import StreamlitChatMessageHistory
+from langchain.agents import AgentExecutor, create_tool_calling_agent, tool
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain_community.chat_message_histories import StreamlitChatMessageHistory
 from langchain_groq import ChatGroq
-import json, re, ast,json5,bson,time
+import bson
+import time
+from db import *
 from bson import ObjectId
-from db import get_client,get_coll
-from streamlit_extras.bottom_container import bottom
-from mongo_query_parser import *
 
-st.set_page_config(page_title='Chat with MongoDB',page_icon='https://i.ibb.co/BLnM2NH/download.jpg',initial_sidebar_state="expanded",layout='wide')
+
+st.set_page_config(page_title='Chat with MongoDB Agent',page_icon='https://i.ibb.co/BLnM2NH/download.jpg',initial_sidebar_state="expanded",layout='wide')
 st.sidebar.image("https://cdn-icons-png.freepik.com/64/17115/17115944.png")
 st.sidebar.title("Chat with MongoDB")
 st.sidebar.subheader("Just paste the MongoDB URI and chat!!!",divider=True)
 
+def make_serializable(obj):
+    if isinstance(obj, ObjectId):
+        return str(obj)
+    elif isinstance(obj, list):
+        return [make_serializable(item) for item in obj]
+    elif isinstance(obj, dict):
+        return {k: make_serializable(v) for k, v in obj.items()}
+    return obj
 
+@tool
+def run_pymongo_command(code_str: str) -> str | list | dict | int:
+    """
+    Executes a PyMongo command on a specified collection.
+    Supports db['collection'].find(...) and db['collection'].aggregate(...)
+    Automatically limits .find() queries to 5 results if no limit is set.
+    """
+    try:
+        db_name = st.session_state.get("db_name", "test")
+        safe_code = code_str.replace("db", f"client['{db_name}']")
+        safe_globals = {"client": client}
+
+        result = eval(safe_code, safe_globals)
+
+        if hasattr(result, "__iter__") and not isinstance(result, (str, dict, list)):
+            result = list(result)
+        return make_serializable(result)
+
+    except Exception as e:
+        print("Execution Error:", e)
+        return f"Execution Error: {e}"
+
+
+if 'mongo_client' not in st.session_state:
+    st.session_state.mongo_client=''
 if 'schemas' not in st.session_state:
     st.session_state.schemas={}
 if 'db_name' not in st.session_state:
@@ -51,7 +85,7 @@ def get_schema(documents,coll_name,collection_lis):
                     if res:
                         schema[key]={'type':"oid",'reference':col}
                         break
-    st.session_state['schemas'][coll_name]=schema
+    return schema
                     
 
 def response_generator(response):   
@@ -62,10 +96,10 @@ def response_generator(response):
 c1=st.sidebar.columns(1)    
     
 with c1[0]:
-    val=st.text_input(placeholder='Enter your MongoDB URI',label='MongoDB URI')
-    if val:
+    url=st.text_input(placeholder='Enter your MongoDB URI',label='MongoDB URI')
+    if url:
         try:
-            client=get_client(val)
+            client=get_client(url)
             st.session_state.mongo_client=client
             client.admin.command('ping')
         except:
@@ -90,72 +124,62 @@ with c1[0]:
                     lis_cols,
                     placeholder="Select your Collection name..."
                 ,key='985')
+                
                 if option:
                     for j in option:
                         coll_name=get_coll(collections,j)
-                        get_schema(coll_name,j,lis_cols)
-api_key=st.secrets['API_KEY']
-msgs = StreamlitChatMessageHistory(key="hist")
+                        with st.spinner("Fetching collections...", show_time=True):
+                            st.session_state['schemas'][j]=get_schema(coll_name,j,lis_cols)
+                            
+                    
+
+tools = [run_pymongo_command]
+model = ChatGroq(model="llama3-70b-8192", api_key=st.secrets["API_KEY"])
 prompt = ChatPromptTemplate.from_messages(
     [
-        ("system",st.secrets['temp']+  """The schema is {schema} and database name is {db_name}"""),
+        ("system", st.secrets['temp']),
         MessagesPlaceholder(variable_name="history"),
-        ("human", "{question}"),
+        ("human", "{input}"),
+        ("placeholder", "{agent_scratchpad}")
     ]
 )
 
-chain = prompt | ChatGroq(model="llama3-8b-8192",api_key=api_key)
-chain_with_history = RunnableWithMessageHistory(
-    chain,
+agent = create_tool_calling_agent(model, tools, prompt)
+agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True,return_intermediate_steps=True)
+
+msgs = StreamlitChatMessageHistory(key="chat_history")
+agent_with_memory = RunnableWithMessageHistory(
+    agent_executor,
     lambda session_id: msgs,
-    input_messages_key="question",
-    history_messages_key="history",
+    input_messages_key="input",
+    history_messages_key="history"
 )
 
-tab1, tab2 = st.tabs(["💬 Chat", "🧪 Run Query"])
-with tab1:
-    chat_container = st.container(height=500,border=False)
-    if not msgs.messages:
-        msgs.add_ai_message("Hi! I am MongoDB bot.How can I assist you today?")
+if not msgs.messages:
+    msgs.add_ai_message("Hi! I am MongoDB bot.How can I assist you today?")
 
-    for msg in msgs.messages:
-        if msg.type=='human':
-            chat_container.chat_message(msg.type,avatar='🧑').write(msg.content.split(".")[0])
-        else:
-            chat_container.chat_message(msg.type,avatar='🤖').write(msg.content)
-    chat_container.markdown("<div style='height: 80px;'></div>", unsafe_allow_html=True)
-    with bottom():
-        if prompt := st.chat_input():
-            chat_container.chat_message('human',avatar='🧑').write(prompt)    
-            config = {"configurable": {"session_id": "1"}}
-            with chat_container.chat_message("ai", avatar='🤖'):
-                message_cont = st.empty()
-                message_cont.markdown("_Thinking..._")
-                response = chain_with_history.invoke(
-                    {"question": f'{prompt}.', 'schema': f'{st.session_state["schemas"]}','db_name':f'{st.session_state["db_name"]}'},
-                    config
-                )
-                st.session_state.cont=response.content
-                message_cont.write(response_generator(response.content))
-                queries=extract_mongo_queries(response.content)
-                st.session_state.queries=queries
+for msg in msgs.messages:
+    role = "user" if msg.type == "human" else "assistant"
+    st.chat_message(role).write(msg.content)
+
+if prompt_text := st.chat_input("Ask MongoDB..."):
+    st.chat_message("user").write(prompt_text)
+    with st.chat_message("assistant"):
+        placeholder = st.empty()
+        placeholder.markdown("💭 _Thinking..._")
+        response = agent_with_memory.invoke(
+        {
+            "input": prompt_text,
+            "db_name": st.session_state["db_name"],
+            "schemas": st.session_state["schemas"]
+        },
+        config={"configurable": {"session_id": "1"}},
+    )
+        output = response["output"]
+        placeholder.empty()
+        placeholder.write(response_generator(output))
 
 
-with tab2:
-    if st.session_state['db_name']:
-        st.markdown("### 🧪 Run MongoDB Query")
-        query = st.text_area("Paste your MongoDB query (e.g., db.users.find({}))")
-        sub=st.button("▶ Run")
-        st.session_state.query=query
-        if sub and st.session_state.query and st.session_state['db_name']:
-            res = run_mongo_query(st.session_state.query)
-            st.session_state.res=res
-        if 'res' in st.session_state and st.session_state['db_name'] and st.session_state['res']:
-            st.subheader("🔎 Query Result:")
-            st.json(st.session_state.res,expanded=False)
-    else:
-        st.markdown("Connect your MongoDB to run the query!!!")
-       
 
 st.markdown("""
     <style>
@@ -167,9 +191,9 @@ st.markdown("""
         body {
             background: linear-gradient(to right, #e0c3ff, #bad1f7);
         }
-        header[data-testid="stHeader"] {
+        /*header[data-testid="stHeader"] {
             display: none;
-        }
+        }*/
         .st-emotion-cache-1gv3huu {
             box-shadow: 1px 0px 10px 0px black;
             background-color: rgb(28 77 91);
