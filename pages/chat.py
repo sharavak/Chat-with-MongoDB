@@ -134,7 +134,7 @@ with c1[0]:
                     
 
 tools = [run_pymongo_command]
-model = ChatGroq(model="llama3-70b-8192", api_key=st.secrets["API_KEY"])
+model = ChatGroq(model="llama-3.3-70b-versatile", api_key=st.secrets["API_KEY"])
 prompt = ChatPromptTemplate.from_messages(
     [
         ("system", st.secrets['temp']),

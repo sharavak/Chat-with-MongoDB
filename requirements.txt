@@ -1,6 +1,6 @@
 streamlit
 pymongo
-langchain
+langchain<1.0.0
 langchain_groq
 langchain_community
 streamlit_extras
